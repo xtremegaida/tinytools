@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slideshow</title>
+<style>
+  html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    --fade: 0.5s;
+  }
+  body.idle { cursor: none; }
+
+  /* Two stacked layers: the incoming image fades in on top of the current one. */
+  .slide {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    z-index: 0;
+  }
+  .slide.back { opacity: 1; z-index: 1; }
+  .slide.front { opacity: 1; z-index: 2; transition: opacity var(--fade) ease-in-out; }
+
+  /* Scale up or down to fill the screen, keeping the aspect ratio. */
+  .stretch .slide { object-fit: contain; }
+  /* Actual size, only shrunk if it would not fit on the screen. */
+  .center .slide { object-fit: scale-down; }
+
+  #message {
+    color: #888;
+    font: 18px system-ui, sans-serif;
+    text-align: center;
+  }
+  #status {
+    position: fixed;
+    z-index: 3;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 80%;
+    padding: 6px 14px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #eee;
+    font: 14px system-ui, sans-serif;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  #status.visible { opacity: 1; }
+</style>
+</head>
+<body>
+<img class="slide" alt="">
+<img class="slide" alt="">
+<div id="message">Loading…</div>
+<div id="status"></div>
+<script>
+(async () => {
+  const layers = [...document.querySelectorAll('.slide')];
+  const message = document.getElementById('message');
+  const status = document.getElementById('status');
+
+  let config;
+  try {
+    const res = await fetch('/api/slideshow');
+    if (!res.ok) throw new Error(await res.text());
+    config = await res.json();
+  } catch (err) {
+    message.textContent = `Could not load the slideshow: ${err.message}`;
+    return;
+  }
+
+  const { images, fit, interval, fade } = config;
+  document.body.classList.add(fit);
+  document.body.style.setProperty('--fade', `${fade}s`);
+  if (images.length === 0) {
+    message.textContent = 'No images found in this folder.';
+    return;
+  }
+  message.remove();
+
+  let index = 0;
+  let paused = false;
+  let timer = null;
+
+  const wrap = (i) => (i + images.length) % images.length;
+  const urlFor = (i) => '/image/' + images[i].split('/').map(encodeURIComponent).join('/');
+
+  // Load the image into the hidden layer, then fade it in over the visible one.
+  let showing = null;
+  let request = 0;
+  let hideTimer = null;
+  function display(url, alt) {
+    const token = ++request;
+    const incoming = layers.find((layer) => layer !== showing);
+    clearTimeout(hideTimer);
+    incoming.className = 'slide';
+    incoming.alt = alt;
+    incoming.src = url;
+    incoming.decode().catch(() => {}).then(() => {
+      if (token !== request) return; // a newer image was requested meanwhile
+      getComputedStyle(incoming).opacity; // flush styles so the fade starts from transparent
+      const previous = showing;
+      if (previous) previous.className = 'slide back';
+      incoming.className = 'slide front';
+      showing = incoming;
+      hideTimer = setTimeout(() => { if (previous) previous.className = 'slide'; }, fade * 1000);
+    });
+  }
+
+  function show(i) {
+    index = wrap(i);
+    display(urlFor(index), images[index]);
+    document.title = `${images[index]} (${index + 1}/${images.length})`;
+    // Warm the cache so the next and previous images appear instantly.
+    new Image().src = urlFor(wrap(index + 1));
+    new Image().src = urlFor(wrap(index - 1));
+    restartTimer();
+  }
+
+  function restartTimer() {
+    clearTimeout(timer);
+    if (interval > 0 && !paused) timer = setTimeout(() => show(index + 1), interval * 1000);
+  }
+
+  let statusTimer = null;
+  function flash(text) {
+    status.textContent = text;
+    status.classList.add('visible');
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => status.classList.remove('visible'), 1500);
+  }
+
+  function step(delta) {
+    show(index + delta);
+    flash(`${index + 1} / ${images.length}   ${images[index]}`);
+  }
+
+  function togglePause() {
+    if (interval <= 0) return;
+    paused = !paused;
+    restartTimer();
+    flash(paused ? 'Paused' : `Playing (every ${interval}s)`);
+  }
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'PageDown':
+        step(1);
+        break;
+      case 'ArrowLeft':
+      case 'PageUp':
+        step(-1);
+        break;
+      case ' ':
+        togglePause();
+        break;
+      case 'f':
+      case 'F':
+        toggleFullscreen();
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  });
+  document.addEventListener('dblclick', toggleFullscreen);
+
+  // Hide the mouse pointer when it hasn't moved for a couple of seconds.
+  let idleTimer = null;
+  function wake() {
+    document.body.classList.remove('idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => document.body.classList.add('idle'), 2000);
+  }
+  document.addEventListener('mousemove', wake);
+  wake();
+
+  show(0);
+})();
+</script>
+</body>
+</html>

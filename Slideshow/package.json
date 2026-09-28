@@ -1,0 +1,19 @@
+{
+  "name": "slideshow",
+  "version": "1.0.0",
+  "description": "Fullscreen browser slideshow of the images in a folder",
+  "main": "slideshow.js",
+  "bin": {
+    "slideshow": "slideshow.js"
+  },
+  "scripts": {
+    "start": "node slideshow.js"
+  },
+  "engines": {
+    "node": ">=18.3"
+  },
+  "files": [
+    "slideshow.js",
+    "index.html"
+  ]
+}
